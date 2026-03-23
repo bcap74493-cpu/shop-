@@ -1,0 +1,1627 @@
+# 🌿 FreshLeaf Backend — Complete Source Code
+
+> All files in one document. Copy each section into the matching path.
+
+---
+
+## `package.json`
+
+```json
+{
+  "name": "freshleaf-backend",
+  "version": "1.0.0",
+  "description": "FreshLeaf Green Grocer — Full REST API backend",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "seed": "node config/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-validator": "^7.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.5.1",
+    "multer": "^1.4.5-lts.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
+
+```
+
+---
+
+## `.env.example`
+
+```bash
+# ─────────────────────────────────────────
+#  FreshLeaf Backend — Environment Variables
+# ─────────────────────────────────────────
+
+# Server
+PORT=5000
+NODE_ENV=development
+
+# MongoDB
+MONGO_URI=mongodb://localhost:27017/freshleaf
+# OR use MongoDB Atlas:
+# MONGO_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/freshleaf
+
+# JWT
+JWT_SECRET=your_super_secret_jwt_key_change_this_in_production
+JWT_EXPIRES_IN=7d
+
+# Owner seed account (created on first run)
+OWNER_EMAIL=owner@freshleaf.com
+OWNER_PASSWORD=owner123
+OWNER_NAME=Shop Owner
+
+# Cloudinary (for production image uploads)
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+
+# Frontend URL (for CORS)
+CLIENT_URL=http://localhost:3000
+
+# File storage: "local" or "cloudinary"
+STORAGE_MODE=local
+
+```
+
+---
+
+## `server.js`
+
+```javascript
+/**
+ * FreshLeaf Backend — server.js
+ * Main entry point: Express + Socket.io
+ */
+
+import 'dotenv/config';
+import express from 'express';
+import { createServer } from 'http';
+import { Server as SocketIO } from 'socket.io';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import connectDB from './config/db.js';
+
+// ── Route imports ──
+import authRoutes       from './routes/auth.js';
+import productRoutes    from './routes/products.js';
+import orderRoutes      from './routes/orders.js';
+import offerRoutes      from './routes/offers.js';
+import adMediaRoutes    from './routes/adMedia.js';
+import ratingRoutes     from './routes/ratings.js';
+import notifRoutes      from './routes/notifications.js';
+import settingsRoutes   from './routes/settings.js';
+import uploadRoutes     from './routes/upload.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── Connect to MongoDB ──
+await connectDB();
+
+const app  = express();
+const http = createServer(app);
+
+// ── Socket.io setup (real-time order tracking) ──
+export const io = new SocketIO(http, {
+  cors: {
+    origin: process.env.CLIENT_URL || '*',
+    methods: ['GET', 'POST'],
+  },
+});
+
+io.on('connection', (socket) => {
+  console.log(`🔌 Socket connected: ${socket.id}`);
+
+  // Customer joins a room for their order
+  socket.on('track_order', (orderId) => {
+    socket.join(`order_${orderId}`);
+    console.log(`📦 Client tracking order: ${orderId}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔌 Socket disconnected: ${socket.id}`);
+  });
+});
+
+// ── Middleware ──
+app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// ── Serve uploaded files (local storage) ──
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ── API Routes ──
+app.use('/api/auth',          authRoutes);
+app.use('/api/products',      productRoutes);
+app.use('/api/orders',        orderRoutes);
+app.use('/api/offers',        offerRoutes);
+app.use('/api/ad-media',      adMediaRoutes);
+app.use('/api/ratings',       ratingRoutes);
+app.use('/api/notifications', notifRoutes);
+app.use('/api/settings',      settingsRoutes);
+app.use('/api/upload',        uploadRoutes);
+
+// ── Health check ──
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', app: 'FreshLeaf API', time: new Date().toISOString() });
+});
+
+// ── Global error handler ──
+app.use((err, _req, res, _next) => {
+  console.error(err.stack);
+  res.status(err.statusCode || 500).json({
+    success: false,
+    message: err.message || 'Internal Server Error',
+  });
+});
+
+const PORT = process.env.PORT || 5000;
+http.listen(PORT, () => {
+  console.log(`\n🌿 FreshLeaf API running on http://localhost:${PORT}`);
+  console.log(`📡 Socket.io enabled for real-time order tracking\n`);
+});
+
+```
+
+---
+
+## `config/db.js`
+
+```javascript
+/**
+ * config/db.js — MongoDB connection via Mongoose
+ */
+import mongoose from 'mongoose';
+
+const connectDB = async () => {
+  try {
+    const conn = await mongoose.connect(process.env.MONGO_URI);
+    console.log(`✅ MongoDB connected: ${conn.connection.host}`);
+  } catch (err) {
+    console.error(`❌ MongoDB connection error: ${err.message}`);
+    process.exit(1);
+  }
+};
+
+export default connectDB;
+
+```
+
+---
+
+## `config/seed.js`
+
+```javascript
+/**
+ * config/seed.js — Seeds default owner account + initial settings
+ * Run: node config/seed.js
+ */
+import 'dotenv/config';
+import connectDB from './db.js';
+import User     from '../models/User.js';
+import Settings from '../models/Settings.js';
+
+await connectDB();
+
+// ── Seed owner ──
+const existing = await User.findOne({ role: 'owner' });
+if (existing) {
+  console.log('✅ Owner account already exists:', existing.email);
+} else {
+  const owner = await User.create({
+    name:     process.env.OWNER_NAME     || 'Shop Owner',
+    email:    process.env.OWNER_EMAIL    || 'owner@freshleaf.com',
+    password: process.env.OWNER_PASSWORD || 'owner123',
+    phone:    '',
+    role:     'owner',
+  });
+  console.log('✅ Owner account created:', owner.email);
+}
+
+// ── Seed default settings ──
+const settingsExist = await Settings.findOne();
+if (!settingsExist) {
+  await Settings.create({
+    shopName:         'FreshLeaf',
+    tagline:          'Farm fresh, delivered fast',
+    logoEmoji:        '🌿',
+    heroTitle:        'Farm-Fresh {em} & Fruits — Delivered Daily',
+    heroEm:           'Vegetables',
+    heroSubtitle:     'Locally sourced, handpicked produce at your doorstep.',
+    heroDeco:         '🥦',
+    shopSectionTitle: 'Fresh Today 🥕',
+    colorDark:        '#1a3a1f',
+    colorMid:         '#2d6a35',
+    colorLime:        '#a8d82b',
+    deliveryFee:      30,
+    freeDeliveryAbove:300,
+    currency:         '₹',
+    deliveryTime:     '20-35 minutes',
+  });
+  console.log('✅ Default settings created');
+}
+
+console.log('\n🌿 Seed complete. Start the server with: node server.js\n');
+process.exit(0);
+
+```
+
+---
+
+## `config/cloudinary.js`
+
+```javascript
+/**
+ * config/cloudinary.js
+ * Configures Cloudinary + multer for image/video uploads.
+ * Set STORAGE_MODE=cloudinary in .env for production.
+ * Set STORAGE_MODE=local  for local disk storage (demo).
+ */
+import { v2 as cloudinary } from 'cloudinary';
+import { CloudinaryStorage } from 'multer-storage-cloudinary';
+import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// ── Choose storage based on env ──
+const useCloud = process.env.STORAGE_MODE === 'cloudinary';
+
+const cloudStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder:         'freshleaf',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'mp4', 'mov'],
+    resource_type:  'auto',
+  },
+});
+
+const diskStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, path.join(__dirname, '../uploads'));
+  },
+  filename: (_req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, unique + path.extname(file.originalname));
+  },
+});
+
+const fileFilter = (_req, file, cb) => {
+  const allowed = /jpeg|jpg|png|webp|mp4|mov/;
+  const ext = allowed.test(path.extname(file.originalname).toLowerCase());
+  const mime = allowed.test(file.mimetype);
+  if (ext && mime) cb(null, true);
+  else cb(new Error('Only images (jpg, png, webp) and videos (mp4, mov) are allowed'));
+};
+
+export const upload = multer({
+  storage:   useCloud ? cloudStorage : diskStorage,
+  fileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max
+});
+
+export { cloudinary };
+
+```
+
+---
+
+## `models/User.js`
+
+```javascript
+/**
+ * models/User.js
+ * Covers both customers and the owner (role field).
+ */
+import mongoose from 'mongoose';
+import bcrypt   from 'bcryptjs';
+
+const userSchema = new mongoose.Schema(
+  {
+    name:  { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    phone: { type: String, default: '' },
+    password: { type: String, required: true, minlength: 6, select: false },
+    role:  { type: String, enum: ['customer', 'owner'], default: 'customer' },
+
+    // Customer-specific: last delivery address for auto-fill
+    lastAddress: {
+      name:    String,
+      phone:   String,
+      pin:     String,
+      area:    String,
+      address: String,
+      city:    String,
+    },
+
+    joinedAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
+// ── Hash password before save ──
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) return next();
+  const salt = await bcrypt.genSalt(12);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
+// ── Compare password ──
+userSchema.methods.matchPassword = async function (plain) {
+  return bcrypt.compare(plain, this.password);
+};
+
+export default mongoose.model('User', userSchema);
+
+```
+
+---
+
+## `models/Product.js`
+
+```javascript
+/**
+ * models/Product.js
+ */
+import mongoose from 'mongoose';
+
+const productSchema = new mongoose.Schema(
+  {
+    name:     { type: String, required: true, trim: true },
+    price:    { type: Number, required: true, min: 0 },
+    unit:     { type: String, required: true, default: 'per kg' },
+    category: { type: String, required: true, default: 'Vegetables' },
+    image:    { type: String, required: true },  // URL (local path or Cloudinary URL)
+    stock:    { type: Number, default: null },     // null = unlimited
+    active:   { type: Boolean, default: true },
+  },
+  { timestamps: true }
+);
+
+export default mongoose.model('Product', productSchema);
+
+```
+
+---
+
+## `models/Order.js`
+
+```javascript
+/**
+ * models/Order.js
+ */
+import mongoose from 'mongoose';
+
+const orderItemSchema = new mongoose.Schema({
+  product:   { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+  name:      String,
+  price:     Number,
+  origPrice: Number,
+  qty:       Number,
+  image:     String,
+}, { _id: false });
+
+const addressSchema = new mongoose.Schema({
+  name:    String,
+  phone:   String,
+  pin:     String,
+  area:    String,
+  address: String,
+  city:    String,
+}, { _id: false });
+
+const orderSchema = new mongoose.Schema(
+  {
+    customer:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    items:     [orderItemSchema],
+    address:   addressSchema,
+    total:     { type: Number, required: true },
+    payment:   { type: String, enum: ['cod', 'upi'], default: 'cod' },
+
+    // Pipeline status
+    status: {
+      type:    String,
+      enum:    ['confirmed', 'packed', 'out_for_delivery', 'delivered', 'cancelled'],
+      default: 'confirmed',
+    },
+
+    // Timestamps for each pipeline step
+    packedAt:     { type: Date, default: null },
+    outAt:        { type: Date, default: null },
+    deliveredAt:  { type: Date, default: null },
+    cancelledAt:  { type: Date, default: null },
+
+    cancelledBy:  { type: String, enum: ['customer', 'owner'], default: null },
+    cancelReason: { type: String, default: null },
+
+    // Delivery coordinates (for map)
+    lat: { type: Number, default: 20.2961 },
+    lng: { type: Number, default: 85.8245 },
+  },
+  { timestamps: true }
+);
+
+export default mongoose.model('Order', orderSchema);
+
+```
+
+---
+
+## `models/index.js (Offer/AdMedia/Rating/Notification/Settings)`
+
+```javascript
+/**
+ * models/Offer.js
+ */
+import mongoose from 'mongoose';
+
+const offerSchema = new mongoose.Schema({
+  product:    { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  discount:   { type: Number, required: true, min: 1, max: 95 },
+  label:      { type: String, default: '' },
+  origPrice:  Number,
+  discPrice:  Number,
+  active:     { type: Boolean, default: true },
+}, { timestamps: true });
+
+export const Offer = mongoose.model('Offer', offerSchema);
+
+// ──────────────────────────────────────────────────
+
+/**
+ * models/AdMedia.js
+ */
+const adMediaSchema = new mongoose.Schema({
+  type:     { type: String, enum: ['image', 'video'], required: true },
+  src:      { type: String, required: true },  // URL
+  caption:  { type: String, default: '' },
+  order:    { type: Number, default: 0 },
+  active:   { type: Boolean, default: true },
+}, { timestamps: true });
+
+export const AdMedia = mongoose.model('AdMedia', adMediaSchema);
+
+// ──────────────────────────────────────────────────
+
+/**
+ * models/Rating.js
+ */
+const ratingSchema = new mongoose.Schema({
+  order:         { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
+  customer:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  custName:      { type: String, default: 'Customer' },
+  deliveryStars: { type: Number, min: 0, max: 5, default: 0 },
+  productStars:  { type: Number, min: 0, max: 5, default: 0 },
+  stars:         { type: Number, min: 0, max: 5 },  // overall average
+  tags:          [String],
+  review:        { type: String, default: '' },
+}, { timestamps: true });
+
+export const Rating = mongoose.model('Rating', ratingSchema);
+
+// ──────────────────────────────────────────────────
+
+/**
+ * models/Notification.js
+ */
+const notifSchema = new mongoose.Schema({
+  recipient:  { type: String, enum: ['owner', 'customer'], required: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  title:      { type: String, required: true },
+  body:       { type: String, default: '' },
+  type:       { type: String, default: 'order' },
+  orderId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
+  read:       { type: Boolean, default: false },
+}, { timestamps: true });
+
+export const Notification = mongoose.model('Notification', notifSchema);
+
+// ──────────────────────────────────────────────────
+
+/**
+ * models/Settings.js
+ * Single document — always upserted.
+ */
+const settingsSchema = new mongoose.Schema({
+  shopName:          { type: String, default: 'FreshLeaf' },
+  tagline:           { type: String, default: 'Farm fresh, delivered fast' },
+  logoEmoji:         { type: String, default: '🌿' },
+  heroTitle:         { type: String, default: 'Farm-Fresh {em} & Fruits — Delivered Daily' },
+  heroEm:            { type: String, default: 'Vegetables' },
+  heroSubtitle:      { type: String, default: 'Locally sourced, handpicked produce at your doorstep.' },
+  heroDeco:          { type: String, default: '🥦' },
+  shopSectionTitle:  { type: String, default: 'Fresh Today 🥕' },
+  colorDark:         { type: String, default: '#1a3a1f' },
+  colorMid:          { type: String, default: '#2d6a35' },
+  colorLime:         { type: String, default: '#a8d82b' },
+  deliveryFee:       { type: Number, default: 30 },
+  freeDeliveryAbove: { type: Number, default: 300 },
+  currency:          { type: String, default: '₹' },
+  deliveryTime:      { type: String, default: '20-35 minutes' },
+  phone:             { type: String, default: '' },
+  whatsapp:          { type: String, default: '' },
+  email:             { type: String, default: '' },
+  address:           { type: String, default: '' },
+  hours:             { type: String, default: '' },
+  instagram:         { type: String, default: '' },
+  facebook:          { type: String, default: '' },
+  website:           { type: String, default: '' },
+  announcement:      { type: String, default: '' },
+  bannerColor:       { type: String, default: '#a8d82b' },
+  bannerVisible:     { type: String, enum: ['show', 'hide'], default: 'hide' },
+}, { timestamps: true });
+
+export const Settings = mongoose.model('Settings', settingsSchema);
+export default Settings;
+
+```
+
+---
+
+## `middleware/auth.js`
+
+```javascript
+/**
+ * middleware/auth.js
+ * JWT verification + role-based authorization.
+ */
+import jwt  from 'jsonwebtoken';
+import User from '../models/User.js';
+
+// ── Verify JWT ──
+export const protect = async (req, res, next) => {
+  let token;
+
+  if (req.headers.authorization?.startsWith('Bearer ')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Not authorized — no token' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = await User.findById(decoded.id).select('-password');
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'User not found' });
+    }
+    next();
+  } catch {
+    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+  }
+};
+
+// ── Owner-only routes ──
+export const ownerOnly = (req, res, next) => {
+  if (req.user?.role !== 'owner') {
+    return res.status(403).json({ success: false, message: 'Access denied — owner only' });
+  }
+  next();
+};
+
+// ── Generate JWT ──
+export const signToken = (id) =>
+  jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  });
+
+```
+
+---
+
+## `middleware/validate.js`
+
+```javascript
+/**
+ * middleware/validate.js
+ * Checks express-validator results and returns 422 if invalid.
+ */
+import { validationResult } from 'express-validator';
+
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(422).json({
+      success: false,
+      message: 'Validation failed',
+      errors:  errors.array().map((e) => ({ field: e.path, msg: e.msg })),
+    });
+  }
+  next();
+};
+
+export default validate;
+
+```
+
+---
+
+## `routes/auth.js`
+
+```javascript
+/**
+ * routes/auth.js
+ * POST /api/auth/register  — customer registration
+ * POST /api/auth/login     — customer or owner login
+ * GET  /api/auth/me        — get current user (protected)
+ * PUT  /api/auth/me        — update profile / last address
+ * POST /api/auth/change-password — change password (protected)
+ */
+import { Router } from 'express';
+import { body }   from 'express-validator';
+import {
+  register,
+  login,
+  getMe,
+  updateMe,
+  changePassword,
+} from '../controllers/authController.js';
+import { protect } from '../middleware/auth.js';
+import validate    from '../middleware/validate.js';
+
+const router = Router();
+
+router.post(
+  '/register',
+  [
+    body('name').notEmpty().withMessage('Name is required'),
+    body('email').isEmail().withMessage('Valid email required'),
+    body('password').isLength({ min: 6 }).withMessage('Password min 6 chars'),
+  ],
+  validate,
+  register
+);
+
+router.post(
+  '/login',
+  [
+    body('email').isEmail().withMessage('Valid email required'),
+    body('password').notEmpty().withMessage('Password required'),
+  ],
+  validate,
+  login
+);
+
+router.get('/me', protect, getMe);
+router.put('/me', protect, updateMe);
+router.post('/change-password', protect, changePassword);
+
+export default router;
+
+```
+
+---
+
+## `controllers/authController.js`
+
+```javascript
+/**
+ * controllers/authController.js
+ */
+import User      from '../models/User.js';
+import { signToken } from '../middleware/auth.js';
+
+const sendToken = (user, statusCode, res) => {
+  const token = signToken(user._id);
+  res.status(statusCode).json({
+    success: true,
+    token,
+    user: {
+      id:          user._id,
+      name:        user.name,
+      email:       user.email,
+      phone:       user.phone,
+      role:        user.role,
+      lastAddress: user.lastAddress,
+      joinedAt:    user.joinedAt,
+    },
+  });
+};
+
+// POST /api/auth/register
+export const register = async (req, res, next) => {
+  try {
+    const { name, email, password, phone } = req.body;
+
+    if (await User.findOne({ email })) {
+      return res.status(409).json({ success: false, message: 'Email already registered' });
+    }
+
+    const user = await User.create({ name, email, password, phone, role: 'customer' });
+    sendToken(user, 201, res);
+  } catch (err) { next(err); }
+};
+
+// POST /api/auth/login
+export const login = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email }).select('+password');
+
+    if (!user || !(await user.matchPassword(password))) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+
+    sendToken(user, 200, res);
+  } catch (err) { next(err); }
+};
+
+// GET /api/auth/me
+export const getMe = async (req, res) => {
+  res.json({ success: true, user: req.user });
+};
+
+// PUT /api/auth/me — update name, phone, lastAddress
+export const updateMe = async (req, res, next) => {
+  try {
+    const { name, phone, lastAddress } = req.body;
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { name, phone, lastAddress },
+      { new: true, runValidators: true }
+    );
+    res.json({ success: true, user: updated });
+  } catch (err) { next(err); }
+};
+
+// POST /api/auth/change-password
+export const changePassword = async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id).select('+password');
+
+    if (!(await user.matchPassword(currentPassword))) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(422).json({ success: false, message: 'New password must be at least 6 characters' });
+    }
+
+    user.password = newPassword;
+    await user.save();
+    sendToken(user, 200, res);
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/products.js`
+
+```javascript
+/**
+ * routes/products.js
+ * GET    /api/products          — list all active products (public)
+ * GET    /api/products/:id      — single product (public)
+ * POST   /api/products          — create (owner only)
+ * PUT    /api/products/:id      — update (owner only)
+ * DELETE /api/products/:id      — delete (owner only)
+ */
+import { Router } from 'express';
+import { body }   from 'express-validator';
+import {
+  getProducts, getProduct,
+  createProduct, updateProduct, deleteProduct,
+} from '../controllers/productController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+import validate from '../middleware/validate.js';
+
+const router = Router();
+
+router.get('/',    getProducts);
+router.get('/:id', getProduct);
+
+router.post(
+  '/',
+  protect, ownerOnly,
+  [
+    body('name').notEmpty().withMessage('Product name required'),
+    body('price').isNumeric().withMessage('Price must be a number'),
+    body('unit').notEmpty().withMessage('Unit required'),
+    body('image').notEmpty().withMessage('Image URL required'),
+  ],
+  validate,
+  createProduct
+);
+
+router.put('/:id',    protect, ownerOnly, updateProduct);
+router.delete('/:id', protect, ownerOnly, deleteProduct);
+
+export default router;
+
+```
+
+---
+
+## `controllers/productController.js`
+
+```javascript
+/**
+ * controllers/productController.js
+ */
+import Product from '../models/Product.js';
+
+export const getProducts = async (_req, res, next) => {
+  try {
+    const products = await Product.find({ active: true }).sort({ createdAt: -1 });
+    res.json({ success: true, count: products.length, products });
+  } catch (err) { next(err); }
+};
+
+export const getProduct = async (req, res, next) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    res.json({ success: true, product });
+  } catch (err) { next(err); }
+};
+
+export const createProduct = async (req, res, next) => {
+  try {
+    const { name, price, unit, category, image, stock } = req.body;
+    const product = await Product.create({ name, price, unit, category, image, stock });
+    res.status(201).json({ success: true, product });
+  } catch (err) { next(err); }
+};
+
+export const updateProduct = async (req, res, next) => {
+  try {
+    const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
+      new: true, runValidators: true,
+    });
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    res.json({ success: true, product });
+  } catch (err) { next(err); }
+};
+
+export const deleteProduct = async (req, res, next) => {
+  try {
+    const product = await Product.findByIdAndUpdate(
+      req.params.id, { active: false }, { new: true }
+    );
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    res.json({ success: true, message: 'Product deleted' });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/orders.js`
+
+```javascript
+/**
+ * routes/orders.js
+ * POST   /api/orders             — place order (customer)
+ * GET    /api/orders             — all orders (owner)
+ * GET    /api/orders/my          — customer's own orders
+ * GET    /api/orders/:id         — single order
+ * PUT    /api/orders/:id/status  — update status (owner)
+ * PUT    /api/orders/:id/cancel  — cancel order (customer, confirmed only)
+ */
+import { Router } from 'express';
+import {
+  placeOrder, getAllOrders, getMyOrders,
+  getOrder, updateStatus, cancelOrder,
+} from '../controllers/orderController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+
+const router = Router();
+
+router.post('/',                protect,              placeOrder);
+router.get('/',                 protect, ownerOnly,   getAllOrders);
+router.get('/my',               protect,              getMyOrders);
+router.get('/:id',              protect,              getOrder);
+router.put('/:id/status',       protect, ownerOnly,   updateStatus);
+router.put('/:id/cancel',       protect,              cancelOrder);
+
+export default router;
+
+```
+
+---
+
+## `controllers/orderController.js`
+
+```javascript
+/**
+ * controllers/orderController.js
+ * Handles order placement, status pipeline, cancellation.
+ * Emits Socket.io events and creates Notifications on status change.
+ */
+import Order   from '../models/Order.js';
+import { Notification } from '../models/index.js';
+import { io }  from '../server.js';
+
+// ── Helpers ──
+const createNotif = (recipient, title, body, type, orderId, customerId = null) =>
+  Notification.create({ recipient, title, body, type, orderId, customerId });
+
+// POST /api/orders — place a new order
+export const placeOrder = async (req, res, next) => {
+  try {
+    const { items, address, total, payment } = req.body;
+
+    if (!items?.length || !address || !total) {
+      return res.status(400).json({ success: false, message: 'items, address and total are required' });
+    }
+
+    const order = await Order.create({
+      customer: req.user._id,
+      items,
+      address,
+      total,
+      payment: payment || 'cod',
+      lat: 20.2961 + (Math.random() - 0.5) * 0.02,
+      lng: 85.8245 + (Math.random() - 0.5) * 0.02,
+    });
+
+    // Notify owner of new order
+    await createNotif(
+      'owner',
+      `New Order #${order._id.toString().slice(-6)} 🛒`,
+      `${items.length} item(s) from ${address.name} · ₹${total}`,
+      'order',
+      order._id
+    );
+
+    // Notify customer
+    await createNotif(
+      'customer',
+      '✅ Order Confirmed!',
+      `Your order has been placed. Total: ₹${total}`,
+      'order',
+      order._id,
+      req.user._id
+    );
+
+    // Emit socket event to owner room
+    io.emit('new_order', { orderId: order._id, customerName: address.name, total });
+
+    res.status(201).json({ success: true, order });
+  } catch (err) { next(err); }
+};
+
+// GET /api/orders — all orders (owner)
+export const getAllOrders = async (_req, res, next) => {
+  try {
+    const orders = await Order.find()
+      .populate('customer', 'name email phone')
+      .sort({ createdAt: -1 });
+    res.json({ success: true, count: orders.length, orders });
+  } catch (err) { next(err); }
+};
+
+// GET /api/orders/my — customer's own orders
+export const getMyOrders = async (req, res, next) => {
+  try {
+    const orders = await Order.find({ customer: req.user._id }).sort({ createdAt: -1 });
+    res.json({ success: true, orders });
+  } catch (err) { next(err); }
+};
+
+// GET /api/orders/:id
+export const getOrder = async (req, res, next) => {
+  try {
+    const order = await Order.findById(req.params.id).populate('customer', 'name email phone');
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    // Customers can only see their own orders
+    if (req.user.role !== 'owner' && order.customer?._id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+    res.json({ success: true, order });
+  } catch (err) { next(err); }
+};
+
+// PUT /api/orders/:id/status — owner updates pipeline status
+export const updateStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+    const valid = ['confirmed', 'packed', 'out_for_delivery', 'delivered', 'cancelled'];
+    if (!valid.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    order.status = status;
+    const now = new Date();
+    if (status === 'packed')            order.packedAt    = now;
+    if (status === 'out_for_delivery')  order.outAt       = now;
+    if (status === 'delivered')         order.deliveredAt = now;
+    await order.save();
+
+    // Customer notifications
+    const custMsgs = {
+      packed:           { title: '📦 Order Packed!',       body: `Order is packed and ready!` },
+      out_for_delivery: { title: '🛵 Out for Delivery!',   body: `Your order is on its way!` },
+      delivered:        { title: '🎉 Order Delivered!',     body: `Your order was delivered. Rate your experience!` },
+    };
+    if (custMsgs[status] && order.customer) {
+      await createNotif('customer', custMsgs[status].title, custMsgs[status].body, status, order._id, order.customer);
+    }
+
+    // Push real-time update via Socket.io to the order's room
+    io.to(`order_${order._id}`).emit('order_status_update', {
+      orderId: order._id,
+      status,
+      updatedAt: now,
+    });
+
+    res.json({ success: true, order });
+  } catch (err) { next(err); }
+};
+
+// PUT /api/orders/:id/cancel — customer cancels (confirmed only)
+export const cancelOrder = async (req, res, next) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    // Only the order's customer or the owner can cancel
+    const isOwner    = req.user.role === 'owner';
+    const isCustomer = order.customer?.toString() === req.user._id.toString();
+    if (!isOwner && !isCustomer) {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    // Customers can only cancel when status is 'confirmed'
+    if (!isOwner && order.status !== 'confirmed') {
+      return res.status(400).json({ success: false, message: 'Cannot cancel — order is already being processed' });
+    }
+    if (order.status === 'delivered' || order.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: 'Order cannot be cancelled' });
+    }
+
+    order.status      = 'cancelled';
+    order.cancelledAt = new Date();
+    order.cancelledBy = isOwner ? 'owner' : 'customer';
+    order.cancelReason = req.body.reason || (isOwner ? 'Cancelled by shop' : 'Cancelled by customer');
+    await order.save();
+
+    // Notify both parties
+    await createNotif('customer', '❌ Order Cancelled', `Order cancelled. Reason: ${order.cancelReason}`, 'cancel', order._id, order.customer);
+    if (isCustomer) {
+      await createNotif('owner', `Order Cancelled by Customer`, `Customer cancelled order ${order._id.toString().slice(-6)}.`, 'cancel', order._id);
+    }
+
+    io.to(`order_${order._id}`).emit('order_status_update', { orderId: order._id, status: 'cancelled' });
+
+    res.json({ success: true, order });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/offers.js`
+
+```javascript
+/**
+ * routes/offers.js
+ * GET    /api/offers        — all active offers (public)
+ * POST   /api/offers        — create offer (owner)
+ * PUT    /api/offers/:id    — update offer (owner)
+ * DELETE /api/offers/:id    — delete offer (owner)
+ */
+import { Router } from 'express';
+import { body }   from 'express-validator';
+import {
+  getOffers, createOffer, updateOffer, deleteOffer,
+} from '../controllers/offerController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+import validate from '../middleware/validate.js';
+
+const router = Router();
+
+router.get('/', getOffers);
+
+router.post(
+  '/',
+  protect, ownerOnly,
+  [
+    body('product').notEmpty().withMessage('Product ID required'),
+    body('discount').isFloat({ min: 1, max: 95 }).withMessage('Discount 1–95% required'),
+  ],
+  validate,
+  createOffer
+);
+
+router.put('/:id',    protect, ownerOnly, updateOffer);
+router.delete('/:id', protect, ownerOnly, deleteOffer);
+
+export default router;
+
+```
+
+---
+
+## `controllers/offerController.js`
+
+```javascript
+/**
+ * controllers/offerController.js
+ */
+import { Offer } from '../models/index.js';
+import Product   from '../models/Product.js';
+
+export const getOffers = async (_req, res, next) => {
+  try {
+    const offers = await Offer.find({ active: true })
+      .populate('product', 'name price image unit category')
+      .sort({ createdAt: -1 });
+    res.json({ success: true, count: offers.length, offers });
+  } catch (err) { next(err); }
+};
+
+export const createOffer = async (req, res, next) => {
+  try {
+    const { product: productId, discount, label } = req.body;
+
+    const product = await Product.findById(productId);
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+
+    const discPrice = Math.round(product.price * (1 - discount / 100));
+    const offer = await Offer.create({
+      product: productId,
+      discount,
+      label:     label || `${discount}% Off`,
+      origPrice: product.price,
+      discPrice,
+    });
+
+    await offer.populate('product', 'name price image unit');
+    res.status(201).json({ success: true, offer });
+  } catch (err) { next(err); }
+};
+
+export const updateOffer = async (req, res, next) => {
+  try {
+    const offer = await Offer.findByIdAndUpdate(req.params.id, req.body, { new: true })
+      .populate('product', 'name price image unit');
+    if (!offer) return res.status(404).json({ success: false, message: 'Offer not found' });
+    res.json({ success: true, offer });
+  } catch (err) { next(err); }
+};
+
+export const deleteOffer = async (req, res, next) => {
+  try {
+    const offer = await Offer.findByIdAndDelete(req.params.id);
+    if (!offer) return res.status(404).json({ success: false, message: 'Offer not found' });
+    res.json({ success: true, message: 'Offer removed' });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/adMedia.js`
+
+```javascript
+/**
+ * routes/adMedia.js
+ * GET    /api/ad-media        — all active media (public)
+ * POST   /api/ad-media        — add media slot (owner)
+ * PUT    /api/ad-media/:id    — update caption / order (owner)
+ * DELETE /api/ad-media/:id    — remove slot (owner)
+ * PUT    /api/ad-media/reorder — reorder slots (owner)
+ */
+import { Router } from 'express';
+import { getMedia, addMedia, updateMedia, deleteMedia, reorderMedia }
+  from '../controllers/adMediaController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+
+const router = Router();
+
+router.get('/',           getMedia);
+router.post('/',          protect, ownerOnly, addMedia);
+router.put('/reorder',    protect, ownerOnly, reorderMedia);
+router.put('/:id',        protect, ownerOnly, updateMedia);
+router.delete('/:id',     protect, ownerOnly, deleteMedia);
+
+export default router;
+
+```
+
+---
+
+## `controllers/adMediaController.js`
+
+```javascript
+/**
+ * controllers/adMediaController.js
+ */
+import { AdMedia } from '../models/index.js';
+
+export const getMedia = async (_req, res, next) => {
+  try {
+    const media = await AdMedia.find({ active: true }).sort({ order: 1, createdAt: 1 });
+    res.json({ success: true, count: media.length, media });
+  } catch (err) { next(err); }
+};
+
+export const addMedia = async (req, res, next) => {
+  try {
+    const { type, src, caption } = req.body;
+    if (!type || !src) {
+      return res.status(400).json({ success: false, message: 'type and src are required' });
+    }
+    const count = await AdMedia.countDocuments({ active: true });
+    const item  = await AdMedia.create({ type, src, caption, order: count });
+    res.status(201).json({ success: true, media: item });
+  } catch (err) { next(err); }
+};
+
+export const updateMedia = async (req, res, next) => {
+  try {
+    const item = await AdMedia.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!item) return res.status(404).json({ success: false, message: 'Media not found' });
+    res.json({ success: true, media: item });
+  } catch (err) { next(err); }
+};
+
+export const deleteMedia = async (req, res, next) => {
+  try {
+    const item = await AdMedia.findByIdAndUpdate(
+      req.params.id, { active: false }, { new: true }
+    );
+    if (!item) return res.status(404).json({ success: false, message: 'Media not found' });
+    res.json({ success: true, message: 'Media removed' });
+  } catch (err) { next(err); }
+};
+
+// Reorder: body = [{ id, order }]
+export const reorderMedia = async (req, res, next) => {
+  try {
+    const updates = req.body; // [{ id: "...", order: 0 }, ...]
+    await Promise.all(
+      updates.map(({ id, order }) => AdMedia.findByIdAndUpdate(id, { order }))
+    );
+    res.json({ success: true, message: 'Media reordered' });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/ratings.js`
+
+```javascript
+/**
+ * routes/ratings.js
+ * GET  /api/ratings           — all ratings (owner)
+ * GET  /api/ratings/public    — public ratings summary
+ * POST /api/ratings           — submit rating (customer)
+ */
+import { Router } from 'express';
+import { body }   from 'express-validator';
+import { getRatings, getPublicRatings, submitRating }
+  from '../controllers/ratingController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+import validate from '../middleware/validate.js';
+
+const router = Router();
+
+router.get('/public', getPublicRatings);
+router.get('/',       protect, ownerOnly, getRatings);
+
+router.post(
+  '/',
+  protect,
+  [
+    body('orderId').notEmpty().withMessage('orderId required'),
+    body('deliveryStars').optional().isInt({ min: 0, max: 5 }),
+    body('productStars').optional().isInt({ min: 0, max: 5 }),
+  ],
+  validate,
+  submitRating
+);
+
+export default router;
+
+```
+
+---
+
+## `controllers/ratingController.js`
+
+```javascript
+/**
+ * controllers/ratingController.js
+ */
+import { Rating, Notification } from '../models/index.js';
+import Order from '../models/Order.js';
+
+export const getRatings = async (_req, res, next) => {
+  try {
+    const ratings = await Rating.find()
+      .populate('customer', 'name')
+      .populate('order', '_id')
+      .sort({ createdAt: -1 });
+
+    const avg = ratings.length
+      ? (ratings.reduce((s, r) => s + r.stars, 0) / ratings.length).toFixed(1)
+      : 0;
+
+    res.json({ success: true, count: ratings.length, average: avg, ratings });
+  } catch (err) { next(err); }
+};
+
+export const getPublicRatings = async (_req, res, next) => {
+  try {
+    const ratings = await Rating.find()
+      .select('custName stars deliveryStars productStars review tags createdAt')
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    const avg = ratings.length
+      ? (ratings.reduce((s, r) => s + r.stars, 0) / ratings.length).toFixed(1)
+      : 0;
+
+    res.json({ success: true, average: avg, ratings });
+  } catch (err) { next(err); }
+};
+
+export const submitRating = async (req, res, next) => {
+  try {
+    const { orderId, deliveryStars = 0, productStars = 0, tags = [], review = '' } = req.body;
+
+    // Validate the order belongs to this customer and is delivered
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    if (order.status !== 'delivered') {
+      return res.status(400).json({ success: false, message: 'Can only rate delivered orders' });
+    }
+
+    // Prevent duplicate ratings
+    const existing = await Rating.findOne({ order: orderId, customer: req.user._id });
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'Order already rated' });
+    }
+
+    const overall = deliveryStars && productStars
+      ? Math.round((deliveryStars + productStars) / 2)
+      : deliveryStars || productStars;
+
+    const rating = await Rating.create({
+      order:         orderId,
+      customer:      req.user._id,
+      custName:      req.user.name,
+      deliveryStars,
+      productStars,
+      stars:         overall,
+      tags,
+      review,
+    });
+
+    // Notify owner
+    const starStr = '⭐'.repeat(overall);
+    await Notification.create({
+      recipient:  'owner',
+      title:      `${starStr} New Rating from ${req.user.name}`,
+      body:       (deliveryStars ? `Delivery: ${deliveryStars}★ ` : '') +
+                  (productStars  ? `Product: ${productStars}★`   : '') +
+                  (review        ? ` · "${review.slice(0, 60)}"` : ''),
+      type:       'rating',
+      orderId,
+    });
+
+    res.status(201).json({ success: true, rating });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/notifications.js`
+
+```javascript
+/**
+ * routes/notifications.js
+ * GET  /api/notifications/owner    — owner notifications (owner only)
+ * GET  /api/notifications/customer — customer's notifications
+ * PUT  /api/notifications/read-all — mark all read
+ * PUT  /api/notifications/:id/read — mark one read
+ */
+import { Router } from 'express';
+import {
+  getOwnerNotifs, getCustNotifs, markAllRead, markOneRead,
+} from '../controllers/notificationController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+
+const router = Router();
+
+router.get('/owner',      protect, ownerOnly, getOwnerNotifs);
+router.get('/customer',   protect,            getCustNotifs);
+router.put('/read-all',   protect,            markAllRead);
+router.put('/:id/read',   protect,            markOneRead);
+
+export default router;
+
+```
+
+---
+
+## `controllers/notificationController.js`
+
+```javascript
+/**
+ * controllers/notificationController.js
+ */
+import { Notification } from '../models/index.js';
+
+export const getOwnerNotifs = async (_req, res, next) => {
+  try {
+    const notifs = await Notification.find({ recipient: 'owner' })
+      .sort({ createdAt: -1 }).limit(60);
+    const unread = notifs.filter(n => !n.read).length;
+    res.json({ success: true, unread, notifs });
+  } catch (err) { next(err); }
+};
+
+export const getCustNotifs = async (req, res, next) => {
+  try {
+    const notifs = await Notification.find({
+      recipient: 'customer',
+      customerId: req.user._id,
+    }).sort({ createdAt: -1 }).limit(40);
+    const unread = notifs.filter(n => !n.read).length;
+    res.json({ success: true, unread, notifs });
+  } catch (err) { next(err); }
+};
+
+export const markAllRead = async (req, res, next) => {
+  try {
+    const filter = req.user.role === 'owner'
+      ? { recipient: 'owner' }
+      : { recipient: 'customer', customerId: req.user._id };
+    await Notification.updateMany(filter, { read: true });
+    res.json({ success: true, message: 'All marked read' });
+  } catch (err) { next(err); }
+};
+
+export const markOneRead = async (req, res, next) => {
+  try {
+    await Notification.findByIdAndUpdate(req.params.id, { read: true });
+    res.json({ success: true });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/settings.js`
+
+```javascript
+/**
+ * routes/settings.js
+ * GET  /api/settings     — get settings (public)
+ * PUT  /api/settings     — update settings (owner only)
+ */
+import { Router } from 'express';
+import { getSettings, updateSettings } from '../controllers/settingsController.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+
+const router = Router();
+
+router.get('/', getSettings);
+router.put('/', protect, ownerOnly, updateSettings);
+
+export default router;
+
+```
+
+---
+
+## `controllers/settingsController.js`
+
+```javascript
+/**
+ * controllers/settingsController.js
+ */
+import { Settings } from '../models/index.js';
+
+export const getSettings = async (_req, res, next) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    res.json({ success: true, settings });
+  } catch (err) { next(err); }
+};
+
+export const updateSettings = async (req, res, next) => {
+  try {
+    const settings = await Settings.findOneAndUpdate(
+      {},
+      { $set: req.body },
+      { new: true, upsert: true, runValidators: true }
+    );
+    res.json({ success: true, settings });
+  } catch (err) { next(err); }
+};
+
+```
+
+---
+
+## `routes/upload.js`
+
+```javascript
+/**
+ * routes/upload.js
+ * POST /api/upload/image  — upload single image (owner only)
+ * POST /api/upload/media  — upload image or video (owner only)
+ * Returns: { url: "..." }  — URL to use in product.image or adMedia.src
+ */
+import { Router } from 'express';
+import path        from 'path';
+import { upload }  from '../config/cloudinary.js';
+import { protect, ownerOnly } from '../middleware/auth.js';
+
+const router = Router();
+const useCloud = process.env.STORAGE_MODE === 'cloudinary';
+
+// Single image upload
+router.post('/image', protect, ownerOnly, upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+  const url = useCloud
+    ? req.file.path                                   // Cloudinary returns full URL in path
+    : `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+  res.json({ success: true, url, filename: req.file.filename || req.file.public_id });
+});
+
+// Image or video upload (for ad media)
+router.post('/media', protect, ownerOnly, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+  const url = useCloud
+    ? req.file.path
+    : `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+  const mimetype = req.file.mimetype || '';
+  const type     = mimetype.startsWith('video') ? 'video' : 'image';
+
+  res.json({ success: true, url, type, filename: req.file.filename || req.file.public_id });
+});
+
+export default router;
+
+```
+
+---
